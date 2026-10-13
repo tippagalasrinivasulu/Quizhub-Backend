@@ -5,82 +5,142 @@ import com.quizhub.repository.*;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
-/** Inserts demo users, quizzes and a few results on first start (only when tables are empty). */
+import java.util.List;
+
+/**
+ * Initializes the system:
+ * - Guarantees admin account (tippagalasrinivasulu@gmail.com / srinu123).
+ * - Clears all dummy test students (priya, arjun, demo, sneha) and their dummy results.
+ * - Seeds starter quizzes for students to take if no quizzes exist.
+ */
 @Component
 public class DataSeeder implements CommandLineRunner {
-    private final UserRepository users; private final QuizRepository quizzes;
-    private final ResultRepository results; private final PasswordEncoder enc;
+    private final UserRepository users;
+    private final QuizRepository quizzes;
+    private final ResultRepository results;
+    private final PasswordEncoder enc;
 
     public DataSeeder(UserRepository users, QuizRepository quizzes, ResultRepository results, PasswordEncoder enc) {
-        this.users = users; this.quizzes = quizzes; this.results = results; this.enc = enc;
+        this.users = users;
+        this.quizzes = quizzes;
+        this.results = results;
+        this.enc = enc;
     }
 
-    private User user(String name, String pass, String role) {
-        return users.findByUsername(name).orElseGet(() -> users.save(new User(name, name + "@quizhub.in", enc.encode(pass), role)));
+    @Override
+    @Transactional
+    public void run(String... args) {
+        // 1. Purge all default dummy students and their results
+        clearDummyStudents();
+
+        // 2. Setup the official Admin account
+        setupAdminUser();
+
+        // 3. Seed starter quizzes (without any dummy results) if empty
+        if (quizzes.count() == 0) {
+            seedStarterQuizzes();
+        }
     }
+
+    private void clearDummyStudents() {
+        // Clear all dummy/demo accounts and their results
+        List<String> dummyNames = List.of("demo", "priya", "arjun", "sneha", "ram", "student", "test");
+        for (User u : users.findAll()) {
+            if ("ADMIN".equalsIgnoreCase(u.getRole())) continue;
+            String lowerUser = u.getUsername().toLowerCase();
+            String lowerEmail = (u.getEmail() != null ? u.getEmail() : "").toLowerCase();
+            boolean isDummy = dummyNames.stream().anyMatch(d -> lowerUser.contains(d) || lowerEmail.contains(d));
+            if (isDummy) {
+                List<Result> userResults = results.findByUserUsernameOrderByTakenAtDesc(u.getUsername());
+                results.deleteAll(userResults);
+                users.delete(u);
+            }
+        }
+    }
+
+    private User setupAdminUser() {
+        String adminEmail = "tippagalasrinivasulu@gmail.com";
+        String adminPass = "srinu123";
+
+        User u = users.findByEmail(adminEmail)
+                .or(() -> users.findByUsername("srinu"))
+                .or(() -> users.findByUsername("admin"))
+                .orElse(null);
+
+        if (u == null) {
+            u = new User("srinu", adminEmail, enc.encode(adminPass), "ADMIN");
+        } else {
+            u.setUsername("srinu");
+            u.setEmail(adminEmail);
+            u.setPassword(enc.encode(adminPass));
+            u.setRole("ADMIN");
+        }
+        u.setXp(0L);
+        users.save(u);
+
+        // Permanently clear ANY past quiz attempts and results under admin accounts
+        List<Result> adminResults = results.findByUserUsernameOrderByTakenAtDesc(u.getUsername());
+        if (!adminResults.isEmpty()) {
+            results.deleteAll(adminResults);
+        }
+        List<Result> adminEmailResults = results.findByUserEmailOrderByTakenAtDesc(adminEmail);
+        if (!adminEmailResults.isEmpty()) {
+            results.deleteAll(adminEmailResults);
+        }
+        return u;
+    }
+
     private static void q(Quiz z, String text, int correct, String a, String b, String c, String d) {
         z.addQuestion(new Question(text, a, b, c, d, correct));
     }
 
-    @Override
-    public void run(String... args) {
-        user("admin", "admin123", "ADMIN");
-        User demo = user("demo", "demo123", "STUDENT");
-        User priya = user("priya", "pass123", "STUDENT");
-        User arjun = user("arjun", "pass123", "STUDENT");
-        if (quizzes.count() > 0) return;
-
-        Quiz java = new Quiz("Java", "Core Java, classes and collections.", "Medium");
+    private void seedStarterQuizzes() {
+        // 1. Subject: Computer Science - Java
+        Quiz java = new Quiz("Java Advanced & Core", "Computer Science", "Core Java, OOP, collections, multithreading.", "Medium", 5, false, null);
         q(java, "Which keyword is used to inherit a class in Java?", 1, "implements", "extends", "inherits", "super");
         q(java, "What is the size of an int in Java?", 2, "8 bits", "16 bits", "32 bits", "64 bits");
         q(java, "Which method is the entry point of a Java program?", 2, "start()", "run()", "main()", "init()");
         q(java, "Which collection does not allow duplicates?", 1, "List", "Set", "ArrayList", "Vector");
+        q(java, "Which interface must be implemented for thread execution?", 0, "Runnable", "Cloneable", "Serializable", "Comparable");
 
-        Quiz sql = new Quiz("SQL", "Queries, joins and constraints.", "Easy");
-        q(sql, "Which command retrieves data from a table?", 1, "GET", "SELECT", "FETCH", "OPEN");
-        q(sql, "Which clause filters rows after grouping?", 2, "WHERE", "ORDER BY", "HAVING", "LIMIT");
-        q(sql, "A PRIMARY KEY column can contain:", 2, "Duplicates", "NULL values", "Unique non-null values", "Only text");
-        q(sql, "Which join returns only matching rows?", 0, "INNER JOIN", "LEFT JOIN", "CROSS JOIN", "FULL JOIN");
+        // 2. Subject: Computer Science - Database Systems
+        Quiz dbms = new Quiz("Database Management & SQL", "Computer Science", "SQL queries, relational algebra, indexing, and normalization.", "Easy", 4, false, null);
+        q(dbms, "Which command retrieves data from a table?", 1, "GET", "SELECT", "FETCH", "OPEN");
+        q(dbms, "Which clause filters rows after grouping?", 2, "WHERE", "ORDER BY", "HAVING", "LIMIT");
+        q(dbms, "A PRIMARY KEY column must contain:", 2, "Duplicates", "NULL values", "Unique non-null values", "Only numbers");
+        q(dbms, "Which join returns only rows with matches in both tables?", 0, "INNER JOIN", "LEFT JOIN", "CROSS JOIN", "FULL JOIN");
 
-        Quiz oop = new Quiz("OOP", "Objects, inheritance and polymorphism.", "Easy");
-        q(oop, "Wrapping data and methods in one unit is called:", 1, "Inheritance", "Encapsulation", "Polymorphism", "Abstraction");
-        q(oop, "Same method name, different behavior is:", 0, "Polymorphism", "Encapsulation", "Compilation", "Linking");
-        q(oop, "A blueprint for creating objects is a:", 2, "Method", "Package", "Class", "Variable");
-        q(oop, "Hiding implementation details is:", 0, "Abstraction", "Overloading", "Casting", "Looping");
+        // 3. Subject: Computer Science - Operating Systems
+        Quiz os = new Quiz("Operating Systems & Concurrency", "Computer Science", "Process scheduling, deadlocks, virtual memory, and page replacement.", "Hard", 6, false, null);
+        q(os, "Which condition is NOT one of Coffman's four deadlock conditions?", 3, "Mutual Exclusion", "Hold and Wait", "No Preemption", "Starvation");
+        q(os, "Which scheduling algorithm is non-preemptive?", 1, "Round Robin", "First Come First Served (FCFS)", "SRTF", "Multilevel Feedback");
+        q(os, "Thrashing occurs when:", 2, "CPU is idling", "A deadlock is resolved", "Page fault rate is excessively high", "RAM is fully wiped");
 
-        Quiz electronics = new Quiz("Electronics", "Diodes, transistors and basic semiconductor devices.", "Medium");
-        q(electronics, "Which device allows current flow in one direction only?", 2, "Resistor", "Inductor", "Diode", "Capacitor");
-        q(electronics, "A transistor is mainly used as a:", 1, "Current source", "Switch or amplifier", "Voltage regulator", "Fuse");
-        q(electronics, "Which semiconductor material is widely used in ICs?", 0, "Silicon", "Copper", "Aluminum", "Gold");
-        q(electronics, "The process of adding impurities to a semiconductor is called:", 3, "Biasing", "Rectification", "Coupling", "Doping");
+        // 4. Subject: Data Structures - Algorithms
+        Quiz dsa = new Quiz("Data Structures & Algorithms", "Data Structures", "Trees, graphs, dynamic programming, and complexity analysis.", "Hard", 8, false, null);
+        q(dsa, "What is the average time complexity of QuickSort?", 1, "O(n)", "O(n log n)", "O(n^2)", "O(log n)");
+        q(dsa, "Which data structure is best for Breadth-First Search (BFS)?", 2, "Stack", "Priority Queue", "Queue", "Heap");
+        q(dsa, "Which algorithm finds the Single-Source Shortest Path with non-negative weights?", 3, "Kruskal's", "Prim's", "Floyd-Warshall", "Dijkstra's");
 
-        Quiz digital = new Quiz("Digital Electronics", "Logic gates, Boolean algebra and combinational circuits.", "Medium");
+        // 5. Subject: Electronics - Digital Electronics
+        Quiz digital = new Quiz("Digital Electronics & Logic", "Electronics", "Logic gates, Boolean algebra, flip-flops, and counters.", "Medium", 5, false, null);
         q(digital, "Which gate outputs 1 only when both inputs are 1?", 3, "OR", "XOR", "NOT", "AND");
         q(digital, "The Boolean expression A + A' equals:", 0, "1", "0", "A", "A'");
-        q(digital, "A flip-flop stores:", 2, "Only one state", "No data", "One bit of data", "A voltage source");
-        q(digital, "Which logic family is known for low power consumption?", 1, "TTL", "CMOS", "RTL", "DTL");
+        q(digital, "A flip-flop stores:", 2, "Continuous wave", "Analog voltage", "One bit of binary data", "No data");
 
-        Quiz communication = new Quiz("Communication Systems", "Modulation, bandwidth and transmission basics.", "Hard");
-        q(communication, "Amplitude modulation changes the signal's:", 1, "Frequency", "Amplitude", "Phase", "Noise level");
-        q(communication, "The bandwidth of a signal indicates:", 2, "Its power", "Its resistance", "Frequency range used", "Data storage");
-        q(communication, "Nyquist theorem is related to:", 0, "Sampling rate", "Diode recovery", "LC tuning", "Gate delay");
-        q(communication, "The main purpose of a modulator is to:", 3, "Store data", "Amplify DC", "Stabilize voltage", "Transfer information onto a carrier");
+        // 6. Subject: PYQ Papers - GATE CSE 2024
+        Quiz gatePyq = new Quiz("GATE CSE 2024 Previous Paper", "PYQ Papers", "Official previous year paper questions from Computer Science GATE exam.", "Hard", 10, true, "GATE 2024");
+        q(gatePyq, "Consider a computer with 48-bit virtual address and 4 KB page size. How many pages are in the virtual address space?", 2, "2^32", "2^40", "2^36", "2^48");
+        q(gatePyq, "In relational algebra, which operation is NOT primitive?", 1, "Selection", "Natural Join", "Projection", "Cartesian Product");
+        q(gatePyq, "TCP uses which protocol mechanism to avoid network congestion?", 0, "Slow Start & Congestion Avoidance", "Token Ring", "ALOHA", "Stop-and-Wait ARQ");
 
-        Quiz signals = new Quiz("Signals & Systems", "Transforms, convolution and LTI systems.", "Hard");
-        q(signals, "The Fourier transform converts a time-domain signal into:", 2, "Logic form", "Frequency-domain form", "Binary code", "Power supply form");
-        q(signals, "An LTI system is characterized by:", 1, "Random behavior", "Linearity and time invariance", "Non-repeating output", "High delay only");
-        q(signals, "Convolution is mainly used to analyze:", 0, "System response", "Battery life", "Heat dissipation", "Signal clipping");
-        q(signals, "Laplace transform is especially useful for:", 3, "Static memory reading", "Analog-to-digital conversion", "Digital logic simplification", "Solving differential equations");
-
-        java = quizzes.save(java); sql = quizzes.save(sql); oop = quizzes.save(oop);
-        electronics = quizzes.save(electronics); digital = quizzes.save(digital); communication = quizzes.save(communication); signals = quizzes.save(signals);
-        results.save(new Result(demo, java, 3, 4));
-        results.save(new Result(demo, sql, 4, 4));
-        results.save(new Result(demo, electronics, 3, 4));
-        results.save(new Result(priya, java, 4, 4));
-        results.save(new Result(priya, sql, 4, 4));
-        results.save(new Result(arjun, oop, 3, 4));
-        results.save(new Result(arjun, digital, 2, 4));
+        quizzes.save(java);
+        quizzes.save(dbms);
+        quizzes.save(os);
+        quizzes.save(dsa);
+        quizzes.save(digital);
+        quizzes.save(gatePyq);
     }
 }

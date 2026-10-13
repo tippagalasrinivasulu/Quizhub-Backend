@@ -16,23 +16,66 @@ public class AuthService {
     private final JwtUtil jwt;
 
     public AuthService(UserRepository users, PasswordEncoder encoder, JwtUtil jwt) {
-        this.users = users; this.encoder = encoder; this.jwt = jwt;
+        this.users = users;
+        this.encoder = encoder;
+        this.jwt = jwt;
     }
 
     public AuthResponse register(RegisterRequest r) {
-        if (users.existsByUsername(r.username()))
+        String username = r.username().trim();
+        String email = r.email().trim().toLowerCase();
+
+        if (users.existsByUsername(username))
             throw new ResponseStatusException(HttpStatus.CONFLICT, "That username is taken. Choose another.");
-        if (users.existsByEmail(r.email()))
+        if (users.existsByEmail(email))
             throw new ResponseStatusException(HttpStatus.CONFLICT, "That email is already registered. Sign in instead.");
-        User u = users.save(new User(r.username(), r.email(), encoder.encode(r.password()), "STUDENT"));
-        return new AuthResponse(jwt.generate(u.getUsername(), u.getRole()), u.getUsername(), u.getRole());
+
+        User u = users.save(new User(username, email, encoder.encode(r.password()), "STUDENT"));
+        return new AuthResponse(
+                jwt.generate(u.getUsername(), u.getRole()),
+                u.getUsername(),
+                u.getEmail(),
+                u.getRole(),
+                u.getLevel(),
+                u.getXp(),
+                u.getRank()
+        );
     }
 
     public AuthResponse login(LoginRequest r) {
-        User u = users.findByUsername(r.username())
+        String identifier = r.username().trim();
+        User u = users.findByUsername(identifier)
+                .or(() -> users.findByEmail(identifier.toLowerCase()))
                 .filter(x -> encoder.matches(r.password(), x.getPassword()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                         "Invalid username or password. Check your details and try again."));
-        return new AuthResponse(jwt.generate(u.getUsername(), u.getRole()), u.getUsername(), u.getRole());
+
+        boolean isAdmin = "ADMIN".equalsIgnoreCase(u.getRole());
+        return new AuthResponse(
+                jwt.generate(u.getUsername(), u.getRole()),
+                u.getUsername(),
+                u.getEmail(),
+                u.getRole(),
+                isAdmin ? 1 : u.getLevel(),
+                isAdmin ? 0L : u.getXp(),
+                isAdmin ? "Administrator" : u.getRank()
+        );
+    }
+
+    public AuthResponse getMe(String username) {
+        User u = users.findByUsername(username)
+                .or(() -> users.findByEmail(username.toLowerCase()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        boolean isAdmin = "ADMIN".equalsIgnoreCase(u.getRole());
+        return new AuthResponse(
+                null,
+                u.getUsername(),
+                u.getEmail(),
+                u.getRole(),
+                isAdmin ? 1 : u.getLevel(),
+                isAdmin ? 0L : u.getXp(),
+                isAdmin ? "Administrator" : u.getRank()
+        );
     }
 }
